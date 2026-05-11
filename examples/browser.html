@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>lufs-web — drop a track and see the numbers</title>
+<style>
+:root { --bg:#0d0d12; --card:#0a0a0f; --gold:#c8a44e; --text:#dcdce0; --mute:#9a9aa4; }
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,system-ui,sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:32px 16px}
+main{max-width:600px;width:100%;background:var(--card);border:1px solid rgba(200,164,78,0.22);border-radius:14px;padding:48px 40px;text-align:center}
+h1{font-family:Georgia,serif;font-weight:400;font-size:28px;margin:0 0 8px;color:#fff}
+p{margin:0 0 24px;color:var(--mute);font-size:14px;line-height:1.6}
+.drop{border:2px dashed rgba(200,164,78,0.35);border-radius:10px;padding:48px 24px;cursor:pointer;transition:.2s;margin:24px 0}
+.drop:hover,.drop.over{border-color:var(--gold);background:rgba(200,164,78,0.04)}
+.drop p{margin:0;color:var(--gold);font-size:13px;letter-spacing:0.18em;text-transform:uppercase;font-weight:700}
+.results{display:none;background:#101019;border:1px solid rgba(200,164,78,0.22);border-radius:10px;padding:18px 22px;text-align:left;font-size:14px;margin-top:24px}
+.row{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.05)}
+.row:last-child{border:0}
+.k{color:var(--mute)}
+.v{color:#fff;font-variant-numeric:tabular-nums;font-weight:600}
+.v.gold{color:var(--gold)}
+.v.red{color:#e08080}
+.err{color:#e08080;font-size:13px;margin-top:16px;min-height:18px}
+input[type=file]{display:none}
+footer{margin-top:32px;color:#666;font-size:11px}
+footer a{color:#9a9aa4;text-decoration:none;border-bottom:1px solid rgba(200,164,78,0.3)}
+</style>
+</head>
+<body>
+<main>
+    <h1>lufs-web demo</h1>
+    <p>Drop a WAV / MP3 / FLAC / M4A here. Runs entirely in your browser — your file never leaves the page.</p>
+    <label class="drop" id="drop">
+        <input type="file" id="file" accept="audio/*">
+        <p>Drop a track · or click to choose</p>
+    </label>
+    <div class="err" id="err"></div>
+    <div class="results" id="results"></div>
+    <footer>
+        Powered by <a href="https://github.com/JeffreyG244/lufs-web" target="_blank">lufs-web</a> · live mastering at <a href="https://luvlang.studio" target="_blank">luvlang.studio</a>
+    </footer>
+</main>
+
+<script type="module">
+import { measure } from '../src/index.js';
+
+const drop = document.getElementById('drop');
+const fileInput = document.getElementById('file');
+const results = document.getElementById('results');
+const errEl = document.getElementById('err');
+
+drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('over'); });
+drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+drop.addEventListener('drop', e => {
+    e.preventDefault();
+    drop.classList.remove('over');
+    if (e.dataTransfer.files[0]) handle(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', e => { if (e.target.files[0]) handle(e.target.files[0]); });
+
+async function handle(file) {
+    errEl.textContent = '';
+    results.style.display = 'none';
+    try {
+        const arrayBuf = await file.arrayBuffer();
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const audioBuf = await audioCtx.decodeAudioData(arrayBuf);
+        const channels = [];
+        for (let i = 0; i < audioBuf.numberOfChannels; i++) channels.push(audioBuf.getChannelData(i));
+        const r = measure({ sampleRate: audioBuf.sampleRate, channels });
+        const fmt = (v, d=1) => (v >= 0 ? '+' : '−') + Math.abs(v).toFixed(d);
+        const tpClass = r.truePeakDB > 0 ? 'red' : 'gold';
+        results.innerHTML = `
+            <div class="row"><span class="k">Integrated LUFS</span><span class="v gold">${fmt(r.integratedLUFS)} LUFS</span></div>
+            <div class="row"><span class="k">LRA</span><span class="v">${r.lra.toFixed(1)} LU</span></div>
+            <div class="row"><span class="k">True peak</span><span class="v ${tpClass}">${fmt(r.truePeakDB, 2)} dBTP</span></div>
+            <div class="row"><span class="k">Mono-sum LUFS</span><span class="v">${fmt(r.monoLUFS)} LUFS</span></div>
+            <div class="row"><span class="k">Mono delta</span><span class="v">${fmt(r.monoDelta, 2)} LU</span></div>
+            <div class="row"><span class="k">Channels · sample rate</span><span class="v">${audioBuf.numberOfChannels} ch · ${audioBuf.sampleRate} Hz</span></div>
+        `;
+        results.style.display = 'block';
+    } catch (e) {
+        errEl.textContent = 'Could not decode that file. Try WAV, MP3, FLAC, or M4A.';
+        console.error(e);
+    }
+}
+</script>
+</body>
+</html>

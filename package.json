@@ -1,0 +1,50 @@
+{
+  "name": "lufs-web",
+  "version": "0.1.0",
+  "description": "Bit-exact BS.1770-4 Integrated LUFS, LRA, and True Peak measurement for the browser, Web Workers, and Node. Zero dependencies. Pure ES module. Pulled from luvlang.studio's production mastering chain.",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./k-weighting": "./src/k-weighting.js",
+    "./lufs": "./src/lufs.js",
+    "./true-peak": "./src/true-peak.js"
+  },
+  "files": [
+    "src/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test test/"
+  },
+  "keywords": [
+    "lufs",
+    "loudness",
+    "bs.1770",
+    "bs1770",
+    "ebu-r128",
+    "audio",
+    "mastering",
+    "true-peak",
+    "lra",
+    "web-audio",
+    "audio-analysis",
+    "broadcast",
+    "streaming"
+  ],
+  "author": "LuvLang Studio (https://luvlang.studio)",
+  "license": "MIT",
+  "homepage": "https://luvlang.studio/free-lufs-check",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/JeffreyG244/lufs-web.git"
+  },
+  "bugs": {
+    "url": "https://github.com/JeffreyG244/lufs-web/issues"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "sideEffects": false
+}
