@@ -1,0 +1,65 @@
+name: Publish to npm on tag
+
+# Tag a release locally:
+#   npm version patch        # or minor / major
+#   git push origin main --follow-tags
+#
+# That pushes a tag like `v0.1.1` which fires this workflow:
+#   1. Runs the test matrix on Node 18/20/22
+#   2. If all green → npm publish with provenance attestation
+#   3. Creates a GitHub Release with the tag's name + auto-generated notes
+#
+# Required: NPM_TOKEN secret (npmjs.com → Access Tokens → Generate "Automation"
+# type → paste into repo Settings → Secrets → Actions → New repository secret).
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write   # for the GitHub Release step
+  id-token: write   # for npm provenance attestation
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [18.x, 20.x, 22.x]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+      - run: npm test
+
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+          always-auth: true
+      - name: Verify package.json version matches tag
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::package.json version ($PKG_VERSION) does not match tag (v$TAG_VERSION)"
+            exit 1
+          fi
+          echo "✓ version match: $PKG_VERSION"
+      - name: Publish to npm with provenance
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
