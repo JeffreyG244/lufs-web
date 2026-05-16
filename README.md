@@ -85,6 +85,144 @@ worker.postMessage(
 );
 ```
 
+## Common use cases
+
+### Check if a master will clip on Spotify or Apple Music's encoder
+
+The single most common LUFS-related question developers and engineers ask. Spotify and Apple Music's lossy encoders introduce clipping when inter-sample peaks exceed roughly -1.0 dBTP. Stock DAW peak meters miss this. `lufs-web` catches it:
+
+```js
+import { measureTruePeak } from 'lufs-web';
+
+const { truePeakDB } = measureTruePeak({ channels: [L, R] });
+
+if (truePeakDB > -1.0) {
+    console.warn(`Master will clip on streaming codec — true peak is ${truePeakDB.toFixed(2)} dBTP, should be ≤ -1.0`);
+}
+```
+
+### Measure integrated LUFS for a streaming platform target
+
+Spotify normalizes to −14 LUFS. Apple Music to −16. If your master exceeds those, the platform applies negative gain on playback.
+
+```js
+import { measureIntegratedLUFS } from 'lufs-web';
+
+const lufs = measureIntegratedLUFS({ sampleRate, channels: [L, R] });
+const spotifyGainAdjust = Math.max(0, lufs - (-14));  // 0 if compliant, positive = how much Spotify will reduce
+const appleGainAdjust   = Math.max(0, lufs - (-16));
+
+console.log(`At ${lufs.toFixed(1)} LUFS — Spotify will turn down ${spotifyGainAdjust.toFixed(1)} dB, Apple ${appleGainAdjust.toFixed(1)} dB`);
+```
+
+### Verify a track meets EBU R128 broadcast spec
+
+Broadcast (TV/radio/podcasts) targets −23 LUFS with a true-peak ceiling of −1.0 dBTP. `lufs-web` measures both in one call:
+
+```js
+import { measure } from 'lufs-web';
+
+const r = measure({ sampleRate, channels: [L, R] });
+const isR128Compliant = Math.abs(r.integratedLUFS - (-23)) <= 0.5 && r.truePeakDB <= -1.0;
+```
+
+### Validate a freshly-mastered track in a Web Worker (recommended)
+
+For tracks longer than ~30 s, measure in a Web Worker so the main UI thread stays responsive.
+
+```js
+// worker.js
+import { measure } from 'lufs-web';
+self.onmessage = ({ data }) => self.postMessage(measure(data));
+```
+
+```js
+// main.js — transfer buffers zero-copy
+const worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
+worker.postMessage(
+    { sampleRate, channels: [L, R] },
+    [L.buffer, R.buffer],
+);
+worker.onmessage = ({ data }) => console.log('LUFS measurement:', data);
+```
+
+### Drop-in replacement for ffmpeg-loudnorm (Node)
+
+If you've been shelling out to `ffmpeg -af loudnorm=print_format=json` for measurement, `lufs-web` is pure JS, no native deps, same numbers:
+
+```js
+import fs from 'node:fs';
+import wav from 'node-wav';  // or any WAV decoder
+import { measure } from 'lufs-web';
+
+const audio = wav.decode(fs.readFileSync('track.wav'));
+const result = measure({
+    sampleRate: audio.sampleRate,
+    channels: audio.channelData,
+});
+console.log(result);
+```
+
+## Compared to other LUFS libraries
+
+| Library | Bit-exact BS.1770-4 | Browser | Node | Bundle size | Native deps |
+|---|---|---|---|---|---|
+| **lufs-web** | ✅ | ✅ | ✅ | ~10 KB minified | ❌ None |
+| libebur128 (C lib) | ✅ | ❌ | ✅ (via bindings) | N/A | ❌ Native |
+| `ebur128` (Rust → WASM) | ✅ | ✅ | ✅ | ~120 KB WASM | WASM blob |
+| `web-audio-loudness` | Approximation | ✅ | ❌ | varies | ❌ |
+| `ffmpeg-loudnorm` (CLI) | ✅ | ❌ | ✅ (via spawn) | ~30 MB binary | ❌ ffmpeg |
+| `node-lufs` | Wraps libebur128 | ❌ | ✅ | N/A | ❌ Native |
+
+`lufs-web` is the only option if you need bit-exact BS.1770-4 measurement in a browser without shipping a WASM blob.
+
+## FAQ
+
+### What's the difference between LUFS and dBFS?
+
+dBFS is the peak amplitude in your DAW — what the meter shows on each sample. LUFS is **perceived loudness** measured per BS.1770-4 — what your ears (and streaming services) actually use to compare track loudness. A track can be -0.3 dBFS (right at digital ceiling) but only -12 LUFS (still moderately quiet by streaming standards). Conversely, a heavily compressed track can be -3 dBFS peak but -7 LUFS — uncomfortably loud.
+
+### Why do I need true peak instead of sample peak?
+
+Inter-sample peaks happen between the samples on disk. They become real, audible peaks when your audio is reconstructed into an analog signal — which happens at every D-to-A converter and inside every lossy codec on the way to a listener. A track that reads -0.3 dBFS sample peak can produce +0.5 dBTP after AAC/MP3/Opus encoding, causing audible clipping. True-peak measurement upsamples the signal 4× to predict this.
+
+### How accurate is lufs-web compared to libebur128 (the reference C library)?
+
+Bit-exact. The K-weighting biquad coefficients, gating algorithm, and true-peak interpolation are all derived from the same specs (BS.1770-4, EBU R128, EBU Tech 3342, BS.1770-5). We validate against 21 reference signals from the BS.1770-4 and EBU Tech 3341 test suites.
+
+### Can I use this for real-time LUFS in a live audio context?
+
+`lufs-web` measures whole buffers — it's designed for offline analysis (post-recording or finalized stems). For real-time short-term LUFS during recording or live monitoring, you'd want a separate streaming implementation. The `kWeight` and `biquadDF2T` low-level functions are exported in case you want to roll your own.
+
+### What's the difference between integrated LUFS and short-term LUFS?
+
+Integrated LUFS is the mean perceived loudness across the full track (gated per BS.1770-4 §3). It's what streaming services use to set playback gain. Short-term LUFS is a 3-second rolling window — useful for compression decisions, but not what streaming normalization compares against.
+
+### Why is my LRA reading 0 on a short track?
+
+LRA requires at least 3 seconds of audio above the absolute gate (-70 LUFS). Tracks shorter than that return 0. This matches libebur128's behavior — the spec doesn't define LRA for sub-3s content.
+
+### Does this work for mono tracks?
+
+Yes. Pass a single channel array and `lufs-web` measures it as mono per BS.1770-4 §1.3 (no channel-weighting on a single channel). You can also pass two channels and use the `monoLUFS` return value to check mono-compatibility — useful for vinyl masters and AM radio.
+
+### Will it work in Safari / iOS?
+
+Yes. Pure ES module with no `SharedArrayBuffer`, `Atomics`, or other newer APIs that have spotty support. Tested on Safari 15+, Chrome, Firefox, Edge, and node 18+.
+
+### How do I run it on a file uploaded via `<input type="file">`?
+
+```js
+const file = e.target.files[0];
+const arrayBuffer = await file.arrayBuffer();
+const audioCtx = new AudioContext();
+const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+const result = measure({
+    sampleRate: audioBuffer.sampleRate,
+    channels: [audioBuffer.getChannelData(0), audioBuffer.getChannelData(1) || audioBuffer.getChannelData(0)],
+});
+```
+
 ## Streaming platform targets
 
 For reference — what each platform normalizes to:
